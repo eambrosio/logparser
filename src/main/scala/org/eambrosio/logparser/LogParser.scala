@@ -16,9 +16,9 @@ import org.apache.kafka.common.serialization.StringDeserializer
 
 import scala.concurrent.duration.FiniteDuration
 
-object LogParser extends App with LazyLogging {
+object LogParser extends App with LazyLogging with Filters {
   private val config        = ConfigFactory.load()
-  val initDate              = config.getLong("init_date")
+  val startDate             = config.getLong("init_date")
   val endDate               = config.getLong("end_date")
   val ConnectedFromHostname = config.getString("from_hostname")
   val ConnectedToHostname   = config.getString("to_hostname")
@@ -34,84 +34,39 @@ object LogParser extends App with LazyLogging {
 
   val source: Source[ConsumerRecord[String, String], Consumer.Control] =
     Consumer.plainSource(settings, Subscriptions.topics("logs"))
-  val extractLog: Flow[ConsumerRecord[String, String], Log, NotUsed] =
+  val extractLog: Flow[ConsumerRecord[String, String], Connection, NotUsed] =
     Flow[ConsumerRecord[String, String]]
       .map { record =>
         val logTrace: Array[String] = record.value().split(" ")
-        Log(logTrace(0).toLong, logTrace(1), logTrace(2))
+        Connection(logTrace(0).toLong, logTrace(1), logTrace(2))
       }
 
-  val zeroLogs: List[Log] = List.empty
-
-  val aggTo: Flow[Log, List[Log], NotUsed] = Flow[Log]
-    .groupBy(Int.MaxValue, _.to)
-    .scan(zeroLogs)((list, log) => list :+ log)
-    .mergeSubstreams
-    .map { list =>
-      //      println(list)
-      list
-
-    }
-
-  def filterFromHost(host: String): Flow[Log, Log, NotUsed] =
-    Flow[Log]
-      .filter(_.from == host)
-
-  def filterToHost(host: String): Flow[Log, Log, NotUsed] =
-    Flow[Log]
-      .filter(_.to == host)
-
-  val aggFrom: Flow[Log, List[Log], NotUsed] = Flow[Log]
-    .groupBy(Int.MaxValue, _.from)
-    .scan(zeroLogs)((list, log) => list :+ log)
-    .mergeSubstreams
-    .map { list =>
-      println(list)
-      list
-
-    }
-
-  val filter: Flow[Log, Log, NotUsed] = Flow[Log]
-    .filter { log =>
-      log.time >= initDate && log.time <= endDate && log.to == ConnectedToHostname
-    }
-    .map { log =>
-      println(s"****** FILTERED LOG: $log **************")
-      log
-    }
-
-  val print: Flow[Seq[List[Log]], List[Log], NotUsed] = Flow[Seq[List[Log]]]
-    .map { list =>
-      println(list)
-      list.flatten.toList
-    }
-
-  def print(host: String): Flow[Seq[Log], Seq[Log], NotUsed] =
-    Flow[Seq[Log]]
+  def print(hostType: String, hostName: String): Flow[Seq[String], Seq[String], NotUsed] =
+    Flow[Seq[String]]
       .map { log =>
-        println(s"*** CONNECTED $host: $log ****************")
+        logger.info(
+          s"\nHOSTS CONNECTED $hostType HOST '$hostName' DURING THE LAST ${duration.toSeconds} SECOND(S):\n${log
+            .mkString("\n")}")
         log
       }
 
   source
     .via(extractLog)
-    .alsoTo(filter.to(Sink.ignore))
+    .alsoTo(toHostAndDatesFilter(ConnectedToHostname, startDate, endDate).to(Sink.ignore))
     .alsoTo(
-      filterToHost(ConnectedToHostname)
+      toHostFilter(ConnectedToHostname)
         .groupedWithin(Int.MaxValue, duration)
-        .via(print("TO"))
+        .map(logs => logs.map(_.from))
+        .via(print("TO", ConnectedToHostname))
         .to(Sink.ignore))
     .alsoTo(
-      filterFromHost(ConnectedFromHostname)
+      fromHostFilter(ConnectedFromHostname)
         .groupedWithin(Int.MaxValue, duration)
-        .via(print("FROM"))
+        .map(logs => logs.map(_.to))
+        .via(print("FROM", ConnectedFromHostname))
         .to(Sink.ignore))
     .runWith(Sink.ignore)
 
 }
 
-case class Log(time: Long, from: String, to: String)
-
-case class ConnectionsFrom(host: String, connections: List[(Long, String)])
-
-case class ConnectionsTo(host: String, connections: List[(Long, String)])
+case class Connection(time: Long, from: String, to: String)
