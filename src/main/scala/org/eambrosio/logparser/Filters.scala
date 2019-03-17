@@ -27,9 +27,8 @@ trait Filters extends LazyLogging {
         log.time >= startDate && log.time <= endDate && log.to == host
       }
       .map { log =>
-        logger.info(s"HOST CONNECTED TO $host (from ${dateFormatter
-          .format(new Date(startDate))} to ${dateFormatter.format(new Date(endDate))}):")
-        logger.info(s"******FROM HOST: ${log.from} **************")
+        logger.info(s"HOST ${log.from} CONNECTED TO $host (from ${dateFormatter
+          .format(new Date(startDate))} to ${dateFormatter.format(new Date(endDate))})")
         log
       }
   }
